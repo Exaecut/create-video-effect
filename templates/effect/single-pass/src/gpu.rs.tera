@@ -1,0 +1,69 @@
+use crate::kernel::{{ kernel_name }}, {{ kernel_params_name }};
+use crate::params::Params;
+
+use after_effects::log;
+use premiere::{self as pr};
+use prgpu::gpu::{buffer, pipeline};
+use prgpu::params::get_param;
+use prgpu::render_properties::GPURenderProperties;
+use prgpu::DeviceHandleInit;
+
+#[derive(Default)]
+struct PremiereGPU;
+
+impl pr::GpuFilter for PremiereGPU {
+	fn global_init() {}
+
+	fn global_destroy() {
+		unsafe {
+			pipeline::cleanup();
+			buffer::cleanup();
+		}
+	}
+
+	fn get_frame_dependencies(
+		&self,
+		_filter: &pr::GpuFilterData,
+		_render_params: pr::RenderParams,
+		_query_index: &mut i32,
+	) -> Result<pr::sys::PrGPUFilterFrameDependency, pr::Error> {
+		Err(pr::Error::None)
+	}
+
+	fn precompute(&self, _filter: &pr::GpuFilterData, _render_params: pr::RenderParams, _index: i32, _frame: pr::sys::PPixHand) -> Result<(), pr::Error> {
+		Ok(())
+	}
+
+	fn render(
+		&self,
+		filter: &pr::GpuFilterData,
+		render_params: pr::RenderParams,
+		frames: *const pr::sys::PPixHand,
+		frame_count: usize,
+		out_frame: *mut pr::sys::PPixHand,
+	) -> Result<(), pr::Error> {
+		let props = unsafe { GPURenderProperties::new(filter, render_params.clone(), frames, frame_count, out_frame) }?;
+		let config = unsafe { prgpu::Configuration::effect(&props, out_frame)? };
+
+		let w = props.bounds.width() as f32;
+		let h = props.bounds.height() as f32;
+		let user_params = {{ kernel_params_name }}::from_gpu(filter, &render_params, w, h);
+
+		let mut cfg = config;
+		cfg.incoming_data = config.outgoing_data;
+		cfg.incoming_pitch_px = config.outgoing_pitch_px;
+
+		unsafe {
+			{{ kernel_name }}(&cfg, user_params).map_err(|e| {
+				log::error!("[{{ crate_name }}] render: {e}");
+				pr::Error::Fail
+			})?;
+		}
+
+		prgpu::timing::log_snapshot();
+
+		Ok(())
+	}
+}
+
+pr::define_gpu_filter!(PremiereGPU);

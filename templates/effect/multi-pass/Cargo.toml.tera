@@ -1,0 +1,49 @@
+[package]
+name = "{{ crate_name }}"
+version = "1.0.0"
+authors = ["Your Name <your.email@example.com>"]
+edition = "2021"
+
+[features]
+shader_hotreload = ["prgpu/shader_hotreload"]
+
+[lib]
+# `cdylib` for the AE/PPr plug-in, `rlib` so external bench / test targets can
+# link against the library and reach into `kernel::*` symbols.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+prgpu = "0.1"
+after-effects = { git = "https://github.com/Exaecut/after-effects.git", branch = "master", features = [
+    "catch-panics",
+] }
+premiere = { git = "https://github.com/Exaecut/after-effects.git", branch = "master" }
+env_logger = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+bincode = "2.0"
+pollster = "0.4"
+futures-intrusive = "0.5"
+parking_lot = "0.12"
+num_cpus = "1.17"
+bytemuck = "1.23"
+
+[build-dependencies]
+pipl = { git = "https://github.com/Exaecut/after-effects.git", branch = "master" }
+prgpu = { version = "0.1", features = ["build"] }
+
+[dev-dependencies]
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "html_reports"] }
+prgpu = { version = "0.1", features = ["timing", "bench"] }
+
+[[bench]]
+name = "effect_cpu"
+path = "benches/effect_cpu.rs"
+harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(shader_hotreload)",
+    "cfg(does_dialog)",
+    "cfg(with_premiere)",
+    "cfg(threaded_rendering)",
+] }

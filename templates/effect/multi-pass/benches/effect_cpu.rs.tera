@@ -1,0 +1,176 @@
+//! CPU-kernel benchmarks for the {{ display_name }} effect (multi-pass).
+//!
+//! Drives the same `{{ pass1_kernel_name }}` and `{{ pass2_kernel_name }}` kernels
+//! that Premiere invokes at render time, but entirely offline — no After Effects /
+//! Premiere host, no Layer plumbing. Uses the `prgpu::bench` harness
+//! (`cargo bench -p {{ crate_name }}`).
+//!
+//! Baseline scenarios measured here
+//! --------------------------------
+//!
+//! 1. `{{ pass1_kernel_name }}_only` — standalone edge detection pass
+//! 2. `{{ pass2_kernel_name }}_only` — standalone composite pass
+//! 3. `full_pipeline`              — two-pass: edge_detect → composite
+//!
+//! Customization guide
+//! -------------------
+//!
+//! - **Add resolutions**: extend the `.resolutions()` slice, e.g.
+//!   `.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K, Resolution::new(7680, 4320, "8K")])`
+//! - **Add pixel formats**: extend the `.formats()` slice, e.g.
+//!   `.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra16, PixelFormat::Bgra32f])`
+//! - **Change parameter defaults**: edit `default_edge_params()` and
+//!   `default_composite_params()` to match your typical user settings.
+//! - **Add more bench scenarios**: copy any bench function, change the name
+//!   and params, then add it to the `criterion_group!` targets list.
+//! - **Adjust sample size / measurement time**: use `.sample_size(N)` and
+//!   `.measurement_time(Duration::from_secs(T))` on the `KernelBenchmark` builder.
+
+use std::time::Duration;
+
+use prgpu::bench::*;
+
+use {{ crate_name }}::kernel::{{ pass1_kernel_params_name }};
+use {{ crate_name }}::kernel::{{ pass2_kernel_params_name }};
+use {{ crate_name }}::kernel::{{ pass1_kernel_name | upper }}_CPU_DISPATCH;
+use {{ crate_name }}::kernel::{{ pass2_kernel_name | upper }}_CPU_DISPATCH;
+
+// Canonical parameter defaults
+fn default_edge_params() -> {{ pass1_kernel_params_name }} {
+	{{ pass1_kernel_params_name }} {
+		edge_strength: 1.0,
+		edge_threshold: 0.1,
+		edge_width: 1.0,
+		edge_src_width: 0,
+		edge_src_height: 0,
+		edge_src_pitch: 0,
+	}
+}
+
+fn default_composite_params() -> {{ pass2_kernel_params_name }} {
+	{{ pass2_kernel_params_name }} {
+		opacity: 1.0,
+		tint_r: 0.0,
+		tint_g: 0.0,
+		tint_b: 0.0,
+		tint_a: 1.0,
+		edge_width: 0,
+		edge_height: 0,
+		edge_pitch: 0,
+	}
+}
+
+// Bench 1 — standalone edge detection
+fn bench_{{ pass1_kernel_name }}(c: &mut Criterion) {
+	KernelBenchmark::new("{{ pass1_kernel_name }}", {{ pass1_kernel_name | upper }}_CPU_DISPATCH, default_edge_params())
+		.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K])
+		.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra32f])
+		.customize(|p, res, _fmt| {
+			let (w, h) = res.dims();
+			p.edge_src_width = w;
+			p.edge_src_height = h;
+			p.edge_src_pitch = w;
+		})
+		.sample_size(30)
+		.measurement_time(Duration::from_secs(5))
+		.run(c);
+}
+
+// Bench 2 — standalone composite
+fn bench_{{ pass2_kernel_name }}(c: &mut Criterion) {
+	KernelBenchmark::new("{{ pass2_kernel_name }}", {{ pass2_kernel_name | upper }}_CPU_DISPATCH, default_composite_params())
+		.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K])
+		.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra32f])
+		.customize(|p, res, _fmt| {
+			let (w, h) = res.dims();
+			p.edge_width = w;
+			p.edge_height = h;
+			p.edge_pitch = w;
+		})
+		.sample_size(30)
+		.measurement_time(Duration::from_secs(5))
+		.run(c);
+}
+
+// Bench 3 — full two-pass pipeline
+fn bench_full_pipeline(c: &mut Criterion) {
+	let base_edge = default_edge_params();
+	let base_comp = default_composite_params();
+
+	let mut group = c.benchmark_group("full_pipeline");
+	group.sample_size(20);
+	group.measurement_time(Duration::from_secs(6));
+	group.warm_up_time(Duration::from_secs(1));
+
+	for &fmt in &[PixelFormat::Bgra8, PixelFormat::Bgra32f] {
+		for &res in &[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K] {
+			let (w, h) = res.dims();
+			group.throughput(Throughput::Elements((w as u64) * (h as u64)));
+
+			let mut edge_p = base_edge;
+			edge_p.edge_src_width = w;
+			edge_p.edge_src_height = h;
+			edge_p.edge_src_pitch = w;
+
+			let mut comp_p = base_comp;
+			comp_p.edge_width = w;
+			comp_p.edge_height = h;
+			comp_p.edge_pitch = w;
+
+			let id = BenchmarkId::new(fmt.label(), res.label());
+			group.bench_function(id, move |b| {
+				let mut scene = Scene::new(res, fmt);
+				let aux_idx = scene.alloc_aux(w, h);
+
+				b.iter(|| {
+					// Pass 1: Edge detection (input → aux)
+					let (aw, ah) = scene.aux_dims(aux_idx);
+					let in_ptr = scene.input_ptr();
+					let aux_ptr = scene.aux_ptr(aux_idx);
+					let edge_cfg = prgpu::types::Configuration::cpu(
+						in_ptr,
+						aux_ptr,
+						scene.pitch_px,
+						aw as i32,
+						aw,
+						ah,
+						fmt.is16f(),
+						fmt.bpp(),
+						fmt.layout_id(),
+					);
+					scene.dispatch_with(&edge_cfg, {{ pass1_kernel_name | upper }}_CPU_DISPATCH, &edge_p);
+
+					// Pass 2: Composite (aux → output, with original input as incoming)
+					let aux_ptr = scene.aux_ptr(aux_idx);
+					let in_ptr = scene.input_ptr();
+					let out_ptr = scene.output_ptr();
+					let mut comp_cfg = prgpu::types::Configuration::cpu(
+						aux_ptr,
+						out_ptr,
+						aw as i32,
+						scene.pitch_px,
+						w,
+						h,
+						fmt.is16f(),
+						fmt.bpp(),
+						fmt.layout_id(),
+					);
+					comp_cfg.incoming_data = Some(in_ptr);
+					comp_cfg.incoming_pitch_px = scene.pitch_px;
+					scene.dispatch_with(&comp_cfg, {{ pass2_kernel_name | upper }}_CPU_DISPATCH, &comp_p);
+
+					std::hint::black_box(scene.output_ptr());
+				});
+			});
+		}
+	}
+	group.finish();
+}
+
+// Harness wiring
+criterion_group!(
+	name = benches;
+	config = Criterion::default();
+	targets = bench_{{ pass1_kernel_name }}, bench_{{ pass2_kernel_name }}, bench_full_pipeline
+);
+criterion_main!(benches);

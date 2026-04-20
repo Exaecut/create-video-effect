@@ -1,0 +1,161 @@
+use after_effects::{self as ae, sys::PF_Pixel, InData, OutData, ParamFlag, ParamUIFlags, Parameters, Precision, ValueDisplayFlag};
+use prgpu::params::SetupParams;
+
+#[repr(usize)]
+#[derive(Eq, PartialEq, Hash, Clone, Copy, Debug)]
+pub enum Params {
+	Feedback = 1,
+	Debug,
+	ReloadShaders,
+
+	EdgeStart,
+	EdgeStrength,
+	EdgeThreshold,
+	EdgeWidth,
+	EdgeEnd,
+
+	TintStart,
+	Tint,
+	Opacity,
+	TintEnd,
+}
+
+impl From<Params> for usize {
+	fn from(p: Params) -> usize {
+		p as usize
+	}
+}
+
+impl SetupParams for Params {
+	fn setup(params: &mut Parameters<Self>, _in_data: InData, _out_data: OutData) -> Result<(), after_effects::Error> {
+		params.add_customized(
+			Params::Feedback,
+			"Feedback",
+			ae::ButtonDef::setup(|f| {
+				f.set_label("Feedback");
+			}),
+			|p| {
+				p.set_flag(ParamFlag::SUPERVISE, true);
+				p.set_flag(ParamFlag::START_COLLAPSED, true);
+				-1
+			},
+		)?;
+
+		// Always add Debug & ReloadShaders to keep param indices stable
+		// for the GPU filter path (which uses enum discriminants as indices).
+		// When debug_assertions is off, hide them from the UI.
+		params.add_customized(
+			Params::Debug,
+			"Debug",
+			ae::CheckBoxDef::setup(|f| {
+				f.set_label("Debug");
+				f.set_default(false);
+				f.set_value(false);
+			}),
+			|p| {
+				if !cfg!(debug_assertions) {
+					p.set_flag(ParamFlag::START_COLLAPSED, true);
+					p.set_ui_flag(ae::ParamUIFlags::INVISIBLE, true);
+				}
+				-1
+			},
+		)?;
+
+		params.add_customized(
+			Params::ReloadShaders,
+			"Reload Shaders",
+			ae::ButtonDef::setup(|f| {
+				f.set_label("Reload Shaders");
+			}),
+			|p| {
+				p.set_flag(ParamFlag::SUPERVISE, true);
+				p.set_flag(ParamFlag::START_COLLAPSED, true);
+				if !cfg!(debug_assertions) {
+					p.set_ui_flag(ParamUIFlags::INVISIBLE, true);
+				}
+				-1
+			},
+		)?;
+
+		params.add_group(Params::EdgeStart, Params::EdgeEnd, "Edge Detection", true, |params| {
+			params.add(
+				Params::EdgeStrength,
+				"Strength",
+				ae::FloatSliderDef::setup(|f| {
+					f.set_default(1.0);
+					f.set_value(f.default());
+					f.set_slider_min(0.0);
+					f.set_slider_max(5.0);
+					f.set_valid_min(0.0);
+					f.set_valid_max(5.0);
+					f.set_precision(Precision::Thousandths);
+				}),
+			)?;
+
+			params.add(
+				Params::EdgeThreshold,
+				"Threshold",
+				ae::FloatSliderDef::setup(|f| {
+					f.set_default(0.1);
+					f.set_value(f.default());
+					f.set_slider_min(0.0);
+					f.set_slider_max(1.0);
+					f.set_valid_min(0.0);
+					f.set_valid_max(1.0);
+					f.set_precision(Precision::Thousandths);
+				}),
+			)?;
+
+			params.add(
+				Params::EdgeWidth,
+				"Width",
+				ae::FloatSliderDef::setup(|f| {
+					f.set_default(1.0);
+					f.set_value(f.default());
+					f.set_slider_min(1.0);
+					f.set_slider_max(10.0);
+					f.set_valid_min(1.0);
+					f.set_valid_max(10.0);
+					f.set_precision(Precision::Thousandths);
+				}),
+			)?;
+
+			Ok(())
+		})?;
+
+		params.add_group(Params::TintStart, Params::TintEnd, "Edge Tint", true, |params| {
+			params.add(
+				Params::Tint,
+				"Tint Color",
+				ae::ColorDef::setup(|f| {
+					f.set_default(PF_Pixel {
+						alpha: 255,
+						red: 0,
+						green: 0,
+						blue: 0,
+					});
+					f.set_value(f.default());
+				}),
+			)?;
+
+			params.add(
+				Params::Opacity,
+				"Opacity",
+				ae::FloatSliderDef::setup(|f| {
+					f.set_default(100.0);
+					f.set_value(f.default());
+					f.set_slider_min(0.0);
+					f.set_slider_max(100.0);
+					f.set_valid_min(0.0);
+					f.set_valid_max(100.0);
+					f.set_display_flags(ValueDisplayFlag::PERCENT);
+					f.set_precision(Precision::Thousandths);
+				}),
+			)?;
+
+			Ok(())
+		})?;
+
+		Ok(())
+	}
+}

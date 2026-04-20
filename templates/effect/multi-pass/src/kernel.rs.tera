@@ -1,0 +1,30 @@
+use prgpu::declare_kernel;
+
+prgpu::kernel_params! {
+	{{ pass1_kernel_params_name }} for crate::params::Params {
+		edge_strength: f32 = [float(EdgeStrength)];
+		edge_threshold: f32 = [float(EdgeThreshold)];
+		edge_width:     f32 = [float(EdgeWidth)];
+		// Filled at render time
+		edge_src_width:  u32;
+		edge_src_height: u32;
+		edge_src_pitch:  u32;
+	}
+}
+
+prgpu::kernel_params! {
+	{{ pass2_kernel_params_name }} for crate::params::Params {
+		opacity:    f32 = [float(Opacity) / 100.0];
+		tint_r:     f32 = [color_r(Tint) / 255.0];
+		tint_g:     f32 = [color_g(Tint) / 255.0];
+		tint_b:     f32 = [color_b(Tint) / 255.0];
+		tint_a:     f32 = [color_a(Tint) / 255.0];
+		// Filled at render time from pass 1 output
+		edge_width:  u32;
+		edge_height: u32;
+		edge_pitch:  u32;
+	}
+}
+
+declare_kernel!({{ pass1_kernel_name }}, {{ pass1_kernel_params_name }});
+declare_kernel!({{ pass2_kernel_name }}, {{ pass2_kernel_params_name }});

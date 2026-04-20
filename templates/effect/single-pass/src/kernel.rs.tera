@@ -1,0 +1,13 @@
+use prgpu::declare_kernel;
+
+prgpu::kernel_params! {
+	{{ kernel_params_name }} for crate::params::Params {
+		strength:   f32 = [float(Strength) / 100.0];
+		tint_r:     f32 = [color_r(Tint) / 255.0];
+		tint_g:     f32 = [color_g(Tint) / 255.0];
+		tint_b:     f32 = [color_b(Tint) / 255.0];
+		tint_a:     f32 = [color_a(Tint) / 255.0];
+	}
+}
+
+declare_kernel!({{ kernel_name }}, {{ kernel_params_name }});

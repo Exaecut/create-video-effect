@@ -1,0 +1,220 @@
+#![allow(clippy::drop_non_drop)]
+// `pub` so the `prgpu::bench` harness in `benches/*.rs` can access the
+// generated `{KERNEL}_CPU_DISPATCH` constants and the param structs.
+pub mod kernel;
+mod params;
+mod gpu;
+
+use params::*;
+use prgpu::{params::SetupParams, RenderContext};
+
+use crate::kernel::{{ pass1_kernel_params_name }};
+use crate::kernel::{{ pass2_kernel_params_name }};
+use after_effects::{self as ae, Error, Parameters};
+
+#[derive(Default)]
+struct Plugin {
+	plugin_id: ae::aegp::PluginId,
+}
+
+impl Drop for Plugin {
+	fn drop(&mut self) {
+		prgpu::cpu::buffer::cleanup();
+	}
+}
+
+#[repr(C)]
+struct FrameData {
+	edge_params: {{ pass1_kernel_params_name }},
+	composite_params: {{ pass2_kernel_params_name }},
+}
+
+impl Plugin {
+	fn reload_shaders(&mut self) {
+		prgpu::cpu::pipeline::hot_reload();
+		prgpu::gpu::pipeline::hot_reload();
+	}
+
+	fn render(
+		&mut self,
+		render_context: RenderContext,
+		edge_params: {{ pass1_kernel_params_name }},
+		composite_params: {{ pass2_kernel_params_name }},
+	) -> Result<(), ae::Error> {
+		let in_data = render_context.in_data;
+		let in_layer = render_context.in_layer;
+		let out_layer = render_context.out_layer;
+
+		let bpp = prgpu::cpu::render::compute_bpp(in_data, out_layer)?;
+
+		let pixel_layout = prgpu::cpu::render::pixel_layout_from_format(in_data, in_layer);
+		let w = out_layer.width() as u32;
+		let h = out_layer.height() as u32;
+
+		if w == 0 || h == 0 {
+			return Ok(());
+		}
+
+		let in_ptr = in_layer.buffer().as_ptr() as *const _ as *mut std::ffi::c_void;
+		let out_ptr = out_layer.buffer_mut().as_mut_ptr() as *mut std::ffi::c_void;
+		let in_stride = in_layer.buffer_stride();
+		let out_stride = out_layer.buffer_stride();
+		let src_pitch = (in_stride as i32) / (bpp as i32);
+		let dest_pitch = (out_stride as i32) / (bpp as i32);
+		let is16f = bpp == 8;
+
+		// Pass 1: Edge detection → intermediate buffer
+		let edge_w = w;
+		let edge_h = h;
+
+		let buf_a = prgpu::cpu::buffer::get_or_create(edge_w, edge_h, bpp, 0);
+
+		let h_config = prgpu::Configuration::cpu(in_ptr, buf_a.buf.raw, src_pitch, buf_a.pitch_px as i32, edge_w, edge_h, is16f, bpp, pixel_layout);
+		let mut edge_p = edge_params;
+		edge_p.edge_src_width = w;
+		edge_p.edge_src_height = h;
+		edge_p.edge_src_pitch = src_pitch as u32;
+		kernel::{{ pass1_kernel_name }}_cpu(in_data, in_layer, out_layer, &h_config, edge_p)?;
+
+		// Pass 2: Composite — read edge mask from outgoing, original from incoming
+		let mut comp = prgpu::Configuration::cpu(buf_a.buf.raw, out_ptr, buf_a.pitch_px as i32, dest_pitch, w, h, is16f, bpp, pixel_layout);
+		comp.incoming_data = Some(in_ptr);
+		comp.incoming_pitch_px = src_pitch;
+
+		let mut cp = composite_params;
+		cp.edge_width = edge_w;
+		cp.edge_height = edge_h;
+		cp.edge_pitch = buf_a.pitch_px as u32;
+
+		kernel::{{ pass2_kernel_name }}_cpu(in_data, in_layer, out_layer, &comp, cp)?;
+
+		prgpu::timing::log_snapshot();
+
+		Ok(())
+	}
+}
+
+impl AdobePluginGlobal for Plugin {
+	fn can_load(_host_name: &str, _host_version: &str) -> bool {
+		true
+	}
+
+	fn params_setup(&self, params: &mut Parameters<Params>, in_data: InData, out_data: OutData) -> Result<(), Error> {
+		let _option_button = in_data.effect().set_options_button_name("Infos");
+		Params::setup(params, in_data, out_data)
+	}
+
+	fn handle_command(&mut self, command: Command, in_data: InData, mut out_data: OutData, params: &mut Parameters<Params>) -> Result<(), Error> {
+		match command {
+			ae::Command::GlobalSetup => {
+				#[cfg(target_os = "windows")]
+				let _ = log::set_logger(&ae::win_dbg_logger::DEBUGGER_LOGGER);
+
+				#[cfg(target_os = "macos")]
+				let _ = ae::oslog::OsLogger::new(env!("CARGO_PKG_NAME")).init();
+
+				log::set_max_level(log::LevelFilter::Info);
+				if in_data.is_premiere() {
+					let suite = ae::pf::suites::PixelFormat::new()?;
+					suite.clear_supported_pixel_formats(in_data.effect_ref())?;
+					let formats = [ae::pr::PixelFormat::Bgra4444_32f, ae::pr::PixelFormat::Bgra4444_8u];
+
+					for fmt in formats {
+						suite.add_supported_pixel_format(in_data.effect_ref(), fmt)?;
+					}
+					suites::Utility::new()?.effect_wants_checked_out_frames_to_match_render_pixel_format(in_data.effect_ref())?;
+				}
+
+				let _option_button = in_data.effect().set_options_button_name("Infos");
+				if let Ok(suite) = aegp::suites::Utility::new() {
+					self.plugin_id = suite.register_with_aegp(None, "{{ match_name }}")?;
+				}
+			}
+			ae::Command::About => {
+				let msg = format!("{{ effect_name }}\r\nVersion: {}", env!("CARGO_PKG_VERSION"));
+				out_data.set_return_msg(msg.as_str());
+			}
+			ae::Command::UpdateParamsUi => {
+				out_data.set_out_flag(OutFlags::RefreshUi, true);
+			}
+			ae::Command::UserChangedParam { param_index } => {
+				if params.type_at(param_index) == Params::ReloadShaders {
+					self.reload_shaders();
+				}
+			}
+			ae::Command::FrameSetup { in_layer, .. } => {
+				out_data.set_width((in_layer.width() as f32).round() as _);
+				out_data.set_height((in_layer.height() as f32).round() as _);
+				out_data.set_origin(Point { h: 0, v: 0 });
+
+				use prgpu::params::CpuParams;
+				let edge_params = {{ pass1_kernel_params_name }}::from_cpu(params, in_layer.width() as f32, in_layer.height() as f32, in_data.is_premiere())?;
+				let composite_params = {{ pass2_kernel_params_name }}::from_cpu(params, in_layer.width() as f32, in_layer.height() as f32, in_data.is_premiere())?;
+				out_data.set_frame_data::<FrameData>(FrameData {
+					edge_params,
+					composite_params,
+				});
+			}
+			ae::Command::FrameSetdown => {
+				in_data.destroy_frame_data::<FrameData>();
+			}
+			ae::Command::Render { in_layer, mut out_layer } => {
+				let frame_data = in_data.frame_data::<FrameData>().unwrap();
+
+				self.render(
+					RenderContext {
+						in_data: &in_data,
+						in_layer: &in_layer,
+						out_layer: &mut out_layer,
+					},
+					frame_data.edge_params,
+					frame_data.composite_params,
+				)?;
+			}
+			ae::Command::SmartPreRender { mut extra } => {
+				let req = extra.output_request();
+				if let Ok(in_result) = extra
+					.callbacks()
+					.checkout_layer(0, 0, &req, in_data.current_time(), in_data.time_step(), in_data.time_scale())
+				{
+					let _ = extra.union_result_rect(in_result.result_rect.into());
+					let _ = extra.union_max_result_rect(in_result.max_result_rect.into());
+				}
+			}
+			ae::Command::SmartRender { extra } => {
+				let cb = extra.callbacks();
+				let Some(input_world) = cb.checkout_layer_pixels(0)? else {
+					return Ok(());
+				};
+
+				let render_result = (|| -> Result<(), ae::Error> {
+					if let Ok(Some(mut output_world)) = cb.checkout_output() {
+						use prgpu::params::CpuParams;
+						let edge_params = {{ pass1_kernel_params_name }}::from_cpu(params, input_world.width() as f32, input_world.height() as f32, in_data.is_premiere())?;
+						let composite_params = {{ pass2_kernel_params_name }}::from_cpu(params, input_world.width() as f32, input_world.height() as f32, in_data.is_premiere())?;
+
+						self.render(
+							RenderContext {
+								in_data: &in_data,
+								in_layer: &input_world,
+								out_layer: &mut output_world,
+							},
+							edge_params,
+							composite_params,
+						)?;
+					}
+					Ok(())
+				})();
+
+				cb.checkin_layer_pixels(0)?;
+
+				render_result?;
+			}
+			_ => {}
+		}
+
+		Ok(())
+	}
+}
+
+ae::define_effect!(Plugin, (), params::Params);

@@ -1,0 +1,34 @@
+[package]
+name = "create-video-effect"
+version = "0.1.0"
+edition = "2024"
+authors = ["Marvin Cano <marvin.cano@exaecut.io>"]
+description = "CLI scaffold tool for PrGPU/VEKL-based video effects and transitions"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/exaecut/create-video-effect"
+homepage = "https://github.com/exaecut/create-video-effect"
+readme = "README.md"
+keywords = ["cli", "adobe", "davinci", "vekl", "video"]
+categories = ["command-line-utilities", "development-tools::cargo-plugins", "multimedia::video"]
+include = [
+    "src/**/*.rs",
+    "templates/**/*",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
+
+[[bin]]
+name = "cargo-create-video-effect"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+inquire = "0.9"
+tera = "1.20"
+serde = { version = "1", features = ["derive"] }
+toml_edit = "0.25"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"

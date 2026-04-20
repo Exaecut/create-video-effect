@@ -1,0 +1,93 @@
+use std::error::Error;
+
+use pipl::*;
+
+use prgpu::build::compile_shaders;
+
+const PF_PLUG_IN_VERSION: u16 = 13;
+const PF_PLUG_IN_SUBVERS: u16 = 28;
+
+#[rustfmt::skip]
+fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let target = std::env::var("TARGET").expect("TARGET env var missing");
+    let is_windows = target.contains("windows");
+    let is_apple = target.contains("apple-darwin") || target.contains("apple-ios");
+
+    let backend = if is_apple {
+        "metal"
+    } else if is_windows {
+        if std::env::var_os("CARGO_FEATURE_OPENCL").is_some() { "opencl" } else { "cuda" }
+    } else {
+        "other"
+    };
+
+    let backend = if let Ok(overridden) = std::env::var("GPU_BACKEND") {
+        Box::leak(overridden.into_boxed_str())
+    } else {
+        backend
+    };
+
+    println!("cargo:rustc-check-cfg=cfg(gpu_backend, values(\"metal\", \"cuda\", \"opencl\", \"other\"))");
+    println!("cargo:rustc-cfg=gpu_backend=\"{}\"", backend);
+    println!("cargo:rerun-if-env-changed=GPU_BACKEND");
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_OPENCL");
+
+    let hotreload_env = std::env::var("EX_SHADER_HOTRELOAD").unwrap_or("false".to_string()) == "true";
+    let hotreload_feature = std::env::var_os("CARGO_FEATURE_SHADER_HOTRELOAD").is_some();
+    let shader_hotreload = hotreload_env || hotreload_feature;
+    println!("cargo:warning=Shader hot reload flag: {}", shader_hotreload);
+
+    println!("cargo:rerun-if-changed=shaders");
+    println!("cargo:rerun-if-changed=../vekl");
+    compile_shaders("./shaders")?;
+
+    if shader_hotreload {
+        println!("cargo:rustc-cfg=shader_hotreload");
+        println!("cargo:rerun-if-env-changed=EX_SHADER_HOTRELOAD");
+    }
+
+    pipl::plugin_build(vec![
+        Property::Kind(PIPLType::AEEffect),
+        Property::Name("{{ effect_name }}"),
+        Property::Category("Development Effects"),
+
+        #[cfg(target_os = "windows")]
+        Property::CodeWin64X86("EffectMain"),
+        #[cfg(target_os = "macos")]
+        Property::CodeMacIntel64("EffectMain"),
+        #[cfg(target_os = "macos")]
+        Property::CodeMacARM64("EffectMain"),
+
+        Property::AE_PiPL_Version { major: 2, minor: 0 },
+        Property::AE_Effect_Spec_Version {
+            major: PF_PLUG_IN_VERSION,
+            minor: PF_PLUG_IN_SUBVERS,
+        },
+        Property::AE_Effect_Version {
+            version: 0,
+            subversion: 1,
+            bugversion: 0,
+            stage: Stage::Develop,
+            build: 0,
+        },
+        Property::AE_Effect_Info_Flags(3),
+        Property::AE_Effect_Global_OutFlags(
+            OutFlags::PixIndependent
+                | OutFlags::UseOutputExtent
+                | OutFlags::IExpandBuffer
+                | OutFlags::NonParamVary
+                | OutFlags::SendUpdateParamsUI,
+        ),
+        Property::AE_Effect_Global_OutFlags_2(
+            OutFlags2::SupportsThreadedRendering
+            | OutFlags2::SupportsSmartRender
+            | OutFlags2::SupportsGetFlattenedSequenceData
+            | OutFlags2::ParamGroupStartCollapsedFlag,
+        ),
+        Property::AE_Effect_Match_Name("{{ match_name }}"),
+        Property::AE_Reserved_Info(0),
+        Property::AE_Effect_Support_URL("https://github.com/user/{{ crate_name }}/issues"),
+    ]);
+
+    Ok(())
+}

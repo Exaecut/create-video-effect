@@ -1,0 +1,40 @@
+#include "vekl.h"
+
+struct {{ kernel_params_name }} {
+    float strength;
+    float tint_r;
+    float tint_g;
+    float tint_b;
+    float tint_a;
+};
+
+kernel void {{ kernel_name }}(
+    param_dev_ro(pixel, outgoing, 0),
+    param_dev_ro(pixel, incoming, 1),
+    param_dev_wo(pixel, dest, 2),
+    param_dev_cbuf(FrameParams, frame_params, 3),
+    param_dev_cbuf({{ kernel_params_name }}, params, 4)
+) {
+    uint2 gid = dispatch_id();
+
+    if (gid.x >= frame_params.width || gid.y >= frame_params.height)
+        return;
+
+    layout_auto la = {frame_params.pixel_layout};
+    image_2d<const pixel, layout_auto> src = {incoming, frame_params.in_pitch, uint2(frame_params.width, frame_params.height), la, frame_params.bpp};
+    image_2d<pixel, layout_auto> dst = {dest, frame_params.dest_pitch, uint2(frame_params.width, frame_params.height), la, frame_params.bpp};
+
+    float2 uv = tex_coord(gid, uint2(frame_params.width, frame_params.height));
+
+    if (frame_params.debug > 0) {
+        // Debug mode: show normalized UV coordinates
+        dst.write(gid, float4(uv.x, uv.y, 0.0, 1.0));
+        return;
+    }
+
+    float4 color = src.read(gid);
+    float4 tint = float4(params.tint_r, params.tint_g, params.tint_b, 1.0);
+    float4 result = mix(color, tint, params.strength * params.tint_a);
+    result.w = color.w;
+    dst.write(gid, result);
+}
