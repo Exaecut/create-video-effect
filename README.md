@@ -1,6 +1,10 @@
 # create-video-effect
 
-A CLI scaffold tool for generating PrGPU/VEKL-based Adobe video effect projects.
+A CLI scaffold tool for generating PrGPU/VEKL-based Adobe video effects and transitions projects.
+
+VEKL : <https://github.com/exaecut/vekl>
+
+PrGPU : <https://github.com/exaecut/prgpu>
 
 ## Installation
 
