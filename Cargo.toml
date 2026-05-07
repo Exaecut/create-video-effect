@@ -1,6 +1,6 @@
 [package]
 name = "create-video-effect"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Marvin Cano <marvin.cano@exaecut.io>"]
 description = "CLI scaffold tool for PrGPU/VEKL-based video effects and transitions"
