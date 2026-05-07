@@ -1,8 +1,8 @@
-use std::path::Path;
+use include_dir::{Dir, DirEntry};
 
 use crate::cli::ResolvedArgs;
 use crate::error::GenerateError;
-use crate::generator::{GenerateContext, Generator, TemplateContext};
+use crate::generator::{embedded_template_dir, embedded_template_prefix, GenerateContext, Generator, TemplateContext};
 use crate::naming::validate_crate_name;
 
 /// Effect generator :
@@ -28,17 +28,13 @@ impl Generator for EffectGenerator {
 		let tpl_ctx = TemplateContext::from_args(args);
 		let tera_ctx = tpl_ctx.to_tera_context();
 
-		// Walk the template directory and render/copy all files
-		let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-		let template_base = Path::new(&manifest_dir).join("templates").join("effect");
-
-		let mode_dir = match args.mode {
-			crate::cli::PassMode::SinglePass => "single-pass",
-			crate::cli::PassMode::MultiPass => "multi-pass",
-		};
-
-		let template_dir = template_base.join(mode_dir);
-		walk_and_render(&template_dir, "", ctx, &tera_ctx)?;
+		// Walk the EMBEDDED templates (baked in at compile time) for the
+		// requested pass mode and render / copy each file.
+		let prefix = embedded_template_prefix(args);
+		let root = embedded_template_dir(args).ok_or_else(|| {
+			GenerateError::Workspace(format!("Embedded template dir '{prefix}' not found in binary"))
+		})?;
+		walk_embedded_and_render(root, prefix, ctx, &tera_ctx)?;
 
 		// Rename .slang shader files to match kernel names.
 		// `prgpu::build::compile_shaders` globs `shaders/*.slang` and the
@@ -115,40 +111,42 @@ impl Generator for EffectGenerator {
 	}
 }
 
-/// Recursively walk a template directory, rendering `.tera` files and copying others.
-fn walk_and_render(
-	dir: &Path,
-	relative_prefix: &str,
+/// Walk the embedded `Dir` for the selected pass mode and render every
+/// `.tera` template / copy every static file to the output directory.
+///
+/// `root_prefix` is the include_dir path of `dir` (e.g. `effect/single-pass`);
+/// we strip it from every entry path so the file lands at the right place
+/// in the user's crate (src/lib.rs, benches/effect_cpu.rs, etc.).
+fn walk_embedded_and_render(
+	dir: &Dir<'_>,
+	root_prefix: &str,
 	ctx: &GenerateContext,
 	tera_ctx: &tera::Context,
 ) -> Result<(), GenerateError> {
-	if !dir.exists() {
-		log::warn!("Template directory does not exist: {}", dir.display());
-		return Ok(());
-	}
+	for entry in dir.entries() {
+		match entry {
+			DirEntry::Dir(sub) => {
+				walk_embedded_and_render(sub, root_prefix, ctx, tera_ctx)?;
+			}
+			DirEntry::File(file) => {
+				let full = file.path().to_string_lossy().to_string();
+				// Strip the pass-mode prefix so the output path is relative
+				// to the generated crate root.
+				let rel = full.strip_prefix(&format!("{root_prefix}/")).unwrap_or(&full).to_string();
+				let file_name = std::path::Path::new(&rel)
+					.file_name()
+					.and_then(|s| s.to_str())
+					.unwrap_or("");
 
-	for entry in std::fs::read_dir(dir)? {
-		let entry = entry?;
-		let file_name = entry.file_name().to_string_lossy().to_string();
-		let entry_path = entry.path();
-		let relative = if relative_prefix.is_empty() {
-			file_name.clone()
-		} else {
-			format!("{relative_prefix}/{file_name}")
-		};
-
-		if entry_path.is_dir() {
-			walk_and_render(&entry_path, &relative, ctx, tera_ctx)?;
-		} else if file_name.ends_with(".tera") {
-			// Render Tera template — output path strips the .tera extension
-			let template_path = &relative;
-			let output_path = &relative[..relative.len() - 5]; // strip ".tera"
-			ctx.render_to_file(template_path, output_path, tera_ctx)?;
-		} else {
-			// Copy static file as-is
-			ctx.copy_static(&entry_path, &relative)?;
+				if file_name.ends_with(".tera") {
+					let output_path = &rel[..rel.len() - 5]; // strip ".tera"
+					ctx.render_to_file(&rel, output_path, tera_ctx)?;
+				} else {
+					// Static file — write the embedded bytes verbatim.
+					ctx.write_file_bytes(&rel, file.contents())?;
+				}
+			}
 		}
 	}
-
 	Ok(())
 }

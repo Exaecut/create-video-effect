@@ -1,12 +1,18 @@
 use std::fs;
 use std::path::Path;
 
+use include_dir::{include_dir, Dir};
 use serde::Serialize;
 use tera::Tera;
 
 use crate::cli::{AppTarget, PassMode, ResolvedArgs};
 use crate::error::GenerateError;
 use crate::naming::{derive_display_name, derive_pipl_names};
+
+/// Templates directory baked into the binary at compile time. After
+/// `cargo install create-video-effect` the source `templates/` tree is
+/// gone, so we load every `.tera` + static file from this embedded image.
+static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
 
 /// Core trait for all subcommands — effect, transition, future types.
 pub trait Generator {
@@ -29,7 +35,8 @@ pub struct GenerateContext {
 }
 
 impl GenerateContext {
-	/// Build a GenerateContext: detect workspace, initialize Tera with the correct template dir.
+	/// Build a GenerateContext: detect workspace, initialize Tera with the
+	/// embedded templates for the requested pass mode.
 	pub fn new(args: &ResolvedArgs) -> Result<Self, GenerateError> {
 		let output_dir = match &args.dir {
 			Some(d) => d.clone(),
@@ -39,8 +46,9 @@ impl GenerateContext {
 		let workspace_cargo_toml = crate::workspace::detect_workspace(&output_dir);
 		let in_workspace = workspace_cargo_toml.is_some();
 
-		let template_dir = template_dir_for(args)?;
-		let tera = Tera::new(&format!("{}/**/*", template_dir.display()))?;
+		// Register every `.tera` template for the selected pass mode with
+		// Tera, using its embedded bytes as the source string.
+		let tera = build_tera_from_embedded(args)?;
 
 		Ok(Self {
 			tera,
@@ -69,12 +77,24 @@ impl GenerateContext {
 	}
 
 	/// Copy a static file (non-template) to the output directory.
+	#[allow(dead_code)]
 	pub fn copy_static(&self, source: &Path, output_relative: &str) -> Result<(), GenerateError> {
 		let output_path = self.output_dir.join(output_relative);
 		if let Some(parent) = output_path.parent() {
 			fs::create_dir_all(parent)?;
 		}
 		fs::copy(source, &output_path)?;
+		Ok(())
+	}
+
+	/// Write raw bytes (from an embedded static file) to the output.
+	/// Used for non-`.tera` files in the embedded template tree.
+	pub fn write_file_bytes(&self, output_relative: &str, bytes: &[u8]) -> Result<(), GenerateError> {
+		let output_path = self.output_dir.join(output_relative);
+		if let Some(parent) = output_path.parent() {
+			fs::create_dir_all(parent)?;
+		}
+		fs::write(&output_path, bytes)?;
 		Ok(())
 	}
 
@@ -98,15 +118,70 @@ impl GenerateContext {
 	}
 }
 
-/// Determine which template directory to use based on the resolved args.
-fn template_dir_for(args: &ResolvedArgs) -> Result<std::path::PathBuf, GenerateError> {
-	let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-	let base = Path::new(&manifest_dir).join("templates");
-
+/// Relative path (inside `EMBEDDED_TEMPLATES`) of the subtree for the
+/// requested pass mode. Always ends without a trailing slash.
+pub(crate) fn embedded_template_prefix(args: &ResolvedArgs) -> &'static str {
 	match args.mode {
-		PassMode::SinglePass => Ok(base.join("effect").join("single-pass")),
-		PassMode::MultiPass => Ok(base.join("effect").join("multi-pass")),
+		PassMode::SinglePass => "effect/single-pass",
+		PassMode::MultiPass => "effect/multi-pass",
 	}
+}
+
+/// Return the embedded `Dir` for the requested pass mode, or `None` if the
+/// build was linked without templates (shouldn't happen in practice).
+pub(crate) fn embedded_template_dir(args: &ResolvedArgs) -> Option<&'static Dir<'static>> {
+	EMBEDDED_TEMPLATES.get_dir(embedded_template_prefix(args))
+}
+
+/// Walk the embedded template tree, register every `.tera` file with Tera
+/// using its relative path (the same path the generator passes to
+/// `tera.render(...)`), and return the configured instance.
+fn build_tera_from_embedded(args: &ResolvedArgs) -> Result<Tera, GenerateError> {
+	let prefix = embedded_template_prefix(args);
+	let root = embedded_template_dir(args).ok_or_else(|| {
+		GenerateError::Workspace(format!("Embedded template dir '{prefix}' not found in binary"))
+	})?;
+
+	let mut tera = Tera::default();
+	register_tera_recursive(&mut tera, root, prefix)?;
+	Ok(tera)
+}
+
+/// Recurse into `dir` and register every `.tera` file with Tera under its
+/// path relative to the pass-mode root (matches what `walk_and_render`
+/// in `commands::effect` passes to `render_to_file`).
+fn register_tera_recursive(
+	tera: &mut Tera,
+	dir: &Dir<'_>,
+	root_prefix: &str,
+) -> Result<(), GenerateError> {
+	for entry in dir.entries() {
+		match entry {
+			include_dir::DirEntry::Dir(sub) => {
+				register_tera_recursive(tera, sub, root_prefix)?;
+			}
+			include_dir::DirEntry::File(file) => {
+				let path = file.path();
+				let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+					continue;
+				};
+				if !name.ends_with(".tera") {
+					continue;
+				}
+				// `path` is relative to `EMBEDDED_TEMPLATES`; strip the
+				// pass-mode prefix so the template name matches the
+				// relative path handed to `render_to_file`.
+				let full = path.to_string_lossy();
+				let rel = full.strip_prefix(&format!("{root_prefix}/")).unwrap_or(&full).to_string();
+				let bytes = file.contents();
+				let text = std::str::from_utf8(bytes).map_err(|e| {
+					GenerateError::Workspace(format!("Template '{rel}' is not valid UTF-8: {e}"))
+				})?;
+				tera.add_raw_template(&rel, text)?;
+			}
+		}
+	}
+	Ok(())
 }
 
 /// Build the unified Tera template context from resolved arguments.

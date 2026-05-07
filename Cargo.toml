@@ -1,6 +1,6 @@
 [package]
 name = "create-video-effect"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Marvin Cano <marvin.cano@exaecut.io>"]
 description = "CLI scaffold tool for PrGPU/VEKL-based video effects and transitions"
@@ -12,6 +12,9 @@ keywords = ["cli", "adobe", "davinci", "vekl", "video"]
 categories = ["command-line-utilities", "development-tools::cargo-plugins", "multimedia::video"]
 include = [
     "src/**/*.rs",
+    # `templates/**` must ship in the crate tarball because include_dir!
+    # reads them from `$CARGO_MANIFEST_DIR/templates` at compile time.
+    # Without them the published binary has nothing to scaffold from.
     "templates/**/*",
     "Cargo.toml",
     "README.md",
@@ -32,3 +35,6 @@ toml_edit = "0.25"
 thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
+# `templates/**` is baked into the binary at compile time so the CLI works
+# after `cargo install create-video-effect` (which drops the source tree).
+include_dir = "0.7"
