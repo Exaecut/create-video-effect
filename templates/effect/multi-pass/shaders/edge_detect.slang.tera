@@ -1,0 +1,75 @@
+import vekl;
+
+// ---------------------------------------------------------------------------
+// {{ display_name }} pass 1 — Sobel edge detection.
+//
+// Reads the original RGBA source from `outgoing`, writes a single-channel
+// edge mask (replicated across RGB for inspection; alpha=1) into `dst`.
+// Pass 2 (`{{ pass2_kernel_name }}.slang`) consumes this result as its
+// `outgoing` input and blends on top of the original.
+// ---------------------------------------------------------------------------
+
+struct {{ pass1_kernel_params_name }}
+{
+    float edgeStrength;
+    float edgeThreshold;
+    float edgeWidth;
+    // Filled at render time so this shader can clamp correctly when it runs
+    // against a buffer whose dims differ from the dispatch size.
+    uint  edgeSrcWidth;
+    uint  edgeSrcHeight;
+    uint  edgeSrcPitch;
+};
+
+float luminance(float4 c)
+{
+    return dot(c.rgb, float3(0.299, 0.587, 0.114));
+}
+
+[shader("compute")]
+[numthreads(16, 16, 1)]
+void {{ pass1_kernel_name }}(
+    uint3 threadId : SV_DispatchThreadID,
+    StructuredBuffer<uint> outgoing,
+    StructuredBuffer<uint> incoming,
+    RWStructuredBuffer<uint> dst,
+    ConstantBuffer<FrameParams> frame,
+    ConstantBuffer<{{ pass1_kernel_params_name }}> params)
+{
+    RWTextureView output = RWTextureView(dst, frame.dstDesc);
+    if (!output.Contains(threadId.xy))
+        return;
+
+    TextureView src = TextureView(outgoing, frame.outDesc);
+    uint2 size = src.Size();
+    int2 maxPx = int2(int(size.x) - 1, int(size.y) - 1);
+
+    int w = max(int(round(params.edgeWidth)), 1);
+    int2 c = int2(int(threadId.x), int(threadId.y));
+
+    int2 tl = clamp(c + int2(-w, -w), int2(0, 0), maxPx);
+    int2 t  = clamp(c + int2( 0, -w), int2(0, 0), maxPx);
+    int2 tr = clamp(c + int2( w, -w), int2(0, 0), maxPx);
+    int2 l  = clamp(c + int2(-w,  0), int2(0, 0), maxPx);
+    int2 r  = clamp(c + int2( w,  0), int2(0, 0), maxPx);
+    int2 bl = clamp(c + int2(-w,  w), int2(0, 0), maxPx);
+    int2 bb = clamp(c + int2( 0,  w), int2(0, 0), maxPx);
+    int2 br = clamp(c + int2( w,  w), int2(0, 0), maxPx);
+
+    float lTL = luminance(src.Load(uint2(tl)));
+    float lT  = luminance(src.Load(uint2(t )));
+    float lTR = luminance(src.Load(uint2(tr)));
+    float lL  = luminance(src.Load(uint2(l )));
+    float lR  = luminance(src.Load(uint2(r )));
+    float lBL = luminance(src.Load(uint2(bl)));
+    float lB  = luminance(src.Load(uint2(bb)));
+    float lBR = luminance(src.Load(uint2(br)));
+
+    float gx = -lTL - 2.0 * lL - lBL + lTR + 2.0 * lR + lBR;
+    float gy = -lTL - 2.0 * lT - lTR + lBL + 2.0 * lB + lBR;
+
+    float edge = sqrt(gx * gx + gy * gy) * params.edgeStrength;
+    edge = (edge >= params.edgeThreshold) ? 1.0 : 0.0;
+
+    output.Store(threadId.xy, float4(edge, edge, edge, 1.0));
+}

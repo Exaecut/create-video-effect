@@ -1,0 +1,56 @@
+import vekl;
+
+// ---------------------------------------------------------------------------
+// {{ display_name }} — simple RGB tint shader (scaffold starter).
+//
+// The scaffold wires every prgpu plumbing bit for you; the only thing you
+// will usually touch in this file is the body of the `{{ kernel_name }}`
+// entry point (and the matching `kernel_params!` block in `src/kernel.rs`).
+//
+// The kernel entry point signature is fixed by prgpu:
+//   - `outgoing` : primary source buffer (Premiere feeds it here)
+//   - `incoming` : secondary source buffer (mirrored from `outgoing` for
+//                  single-pass effects, so either slot is safe to read)
+//   - `dst`      : write-target buffer
+//   - `frame`    : TextureDesc + dims + time for all three buffers
+//   - `params`   : the struct defined below, byte-identical to the Rust side
+//
+// Tip: `TextureView` / `RWTextureView` wrap a buffer + its `TextureDesc`, so
+// one declaration gives you `.Load(px)`, `.Store(px, val)`, `.SampleLinear(uv)`,
+// `.SampleLinear(uv, lod)` (requires mip chain), and `.Contains(px)`.
+// ---------------------------------------------------------------------------
+
+struct {{ kernel_params_name }}
+{
+    float strength;
+    float tintR;
+    float tintG;
+    float tintB;
+    float tintA;
+};
+
+[shader("compute")]
+[numthreads(16, 16, 1)]
+void {{ kernel_name }}(
+    uint3 threadId : SV_DispatchThreadID,
+    StructuredBuffer<uint> outgoing,
+    StructuredBuffer<uint> incoming,
+    RWStructuredBuffer<uint> dst,
+    ConstantBuffer<FrameParams> frame,
+    ConstantBuffer<{{ kernel_params_name }}> params)
+{
+    RWTextureView output = RWTextureView(dst, frame.dstDesc);
+    if (!output.Contains(threadId.xy))
+        return;
+
+    TextureView src = TextureView(outgoing, frame.outDesc);
+
+    float4 color = src.Load(threadId.xy);
+
+    // tint * alpha-weighted lerp — identical to the legacy VEKL-C version.
+    float3 tint = float3(params.tintR, params.tintG, params.tintB);
+    float t = saturate(params.strength * params.tintA);
+    float3 rgb = lerp(color.rgb, tint, t);
+
+    output.Store(threadId.xy, float4(rgb, color.w));
+}

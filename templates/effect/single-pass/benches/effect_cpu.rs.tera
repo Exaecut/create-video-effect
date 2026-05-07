@@ -1,34 +1,33 @@
 //! CPU-kernel benchmarks for the {{ display_name }} effect.
 //!
-//! Drives the same `{{ kernel_name }}` kernel that Premiere invokes at
+//! Drives the same `{{ kernel_name }}` kernel that Premiere / AE invokes at
 //! render time, but entirely offline — no After Effects / Premiere host, no
-//! Layer plumbing. Uses the `prgpu::bench` harness (`cargo bench -p {{ crate_name }}`).
-//!
-//! Baseline scenarios measured here
-//! --------------------------------
-//!
-//! 1. `{{ kernel_name }}_only` — single-pass tint effect
+//! Layer plumbing. Uses the `prgpu::bench` harness (`cargo bench -p
+//! {{ crate_name }}`).
 //!
 //! Customization guide
 //! -------------------
 //!
 //! - **Add resolutions**: extend the `.resolutions()` slice, e.g.
-//!   `.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K, Resolution::new(7680, 4320, "8K")])`
+//!   `.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K])`.
 //! - **Add pixel formats**: extend the `.formats()` slice, e.g.
-//!   `.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra16, PixelFormat::Bgra32f])`
-//! - **Change parameter defaults**: edit `default_params()` to match your typical user settings.
-//! - **Add more bench scenarios**: copy the `bench_{{ kernel_name }}` function, change the name
-//!   and params, then add it to the `criterion_group!` targets list.
+//!   `.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra16, PixelFormat::Bgra32f])`.
+//! - **Change parameter defaults**: edit `default_params()` to match your
+//!   typical user settings.
+//! - **Add more bench scenarios**: copy the `bench_{{ kernel_name }}` function,
+//!   change the name / params, then add it to the `criterion_group!` targets
+//!   list.
 //! - **Adjust sample size / measurement time**: use `.sample_size(N)` and
-//!   `.measurement_time(Duration::from_secs(T))` on the `KernelBenchmark` builder.
+//!   `.measurement_time(Duration::from_secs(T))` on the `KernelBenchmark`
+//!   builder.
 
 use std::time::Duration;
 
 use prgpu::bench::*;
 
-use {{ crate_name }}::kernel::{{ kernel_params_name }}, {{ kernel_name | upper }}_CPU_DISPATCH;
+use {{ crate_name }}::kernel::{ {{ kernel_params_name }}, {{ kernel_name | upper }}_CPU_DISPATCH_TILE };
 
-// Canonical parameter defaults
+/// Canonical parameter defaults used by every scene.
 fn default_params() -> {{ kernel_params_name }} {
 	{{ kernel_params_name }} {
 		strength: 1.0,
@@ -39,17 +38,15 @@ fn default_params() -> {{ kernel_params_name }} {
 	}
 }
 
-// Bench — single-pass tint
 fn bench_{{ kernel_name }}(c: &mut Criterion) {
-	KernelBenchmark::new("{{ kernel_name }}", {{ kernel_name | upper }}_CPU_DISPATCH, default_params())
-		.resolutions(&[Resolution::HD720, Resolution::HD1080, Resolution::UHD4K])
+	KernelBenchmark::new("{{ kernel_name }}", {{ kernel_name | upper }}_CPU_DISPATCH_TILE, default_params())
+		.resolutions(&[Resolution::HD720, Resolution::HD1080])
 		.formats(&[PixelFormat::Bgra8, PixelFormat::Bgra32f])
-		.sample_size(30)
+		.sample_size(20)
 		.measurement_time(Duration::from_secs(5))
 		.run(c);
 }
 
-// Harness wiring
 criterion_group!(
 	name = benches;
 	config = Criterion::default();

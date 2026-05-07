@@ -1,0 +1,55 @@
+import vekl;
+
+// ---------------------------------------------------------------------------
+// {{ display_name }} pass 2 — composite the edge mask over the original.
+//
+//   outgoing = edge mask buffer (produced by `{{ pass1_kernel_name }}.slang`)
+//   incoming = original RGBA source (mirrored from Premiere's source slot)
+//   dst      = final output buffer
+// ---------------------------------------------------------------------------
+
+struct {{ pass2_kernel_params_name }}
+{
+    float opacity;
+    float tintR;
+    float tintG;
+    float tintB;
+    float tintA;
+    // Filled at render time — matches the aux buffer allocated by the host.
+    uint  edgeWidth;
+    uint  edgeHeight;
+    uint  edgePitch;
+};
+
+[shader("compute")]
+[numthreads(16, 16, 1)]
+void {{ pass2_kernel_name }}(
+    uint3 threadId : SV_DispatchThreadID,
+    StructuredBuffer<uint> outgoing,
+    StructuredBuffer<uint> incoming,
+    RWStructuredBuffer<uint> dst,
+    ConstantBuffer<FrameParams> frame,
+    ConstantBuffer<{{ pass2_kernel_params_name }}> params)
+{
+    RWTextureView output = RWTextureView(dst, frame.dstDesc);
+    if (!output.Contains(threadId.xy))
+        return;
+
+    TextureView originalView = TextureView(incoming, frame.inDesc);
+    TextureView edgeView     = TextureView(outgoing, frame.outDesc);
+
+    float4 original = originalView.Load(threadId.xy);
+
+    // Edge mask is laid out at `edgeWidth x edgeHeight`; the caller guarantees
+    // that dims match the dispatch (no rescale needed at this stage). Clamp
+    // defensively in case the host changes the aux dims later.
+    uint2 edgeSize = edgeView.Size();
+    uint2 ePx = uint2(min(threadId.x, edgeSize.x - 1), min(threadId.y, edgeSize.y - 1));
+    float mask = edgeView.Load(ePx).r;
+
+    float3 tint = float3(params.tintR, params.tintG, params.tintB) * params.tintA;
+    float3 tintedEdge = mask * tint * params.opacity;
+    float3 rgb = original.rgb + tintedEdge;
+
+    output.Store(threadId.xy, float4(rgb, original.w));
+}

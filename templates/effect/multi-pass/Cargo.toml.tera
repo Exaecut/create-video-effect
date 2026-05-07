@@ -13,22 +13,31 @@ shader_hotreload = ["prgpu/shader_hotreload"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-prgpu = "0.1"
-after-effects = { git = "https://github.com/Exaecut/after-effects.git", branch = "master", features = [
-    "catch-panics",
-] }
-premiere = { git = "https://github.com/Exaecut/after-effects.git", branch = "master" }
-env_logger = "0.11"
-serde = { version = "1.0", features = ["derive"] }
-bincode = "2.0"
-pollster = "0.4"
-futures-intrusive = "0.5"
-parking_lot = "0.12"
-num_cpus = "1.17"
+# prgpu owns the Slang shader pipeline (cpu + gpu dispatch, mip chain, CPU
+# tile rayon pool, timing, logging). The `timing` feature just toggles the
+# `timing::log_snapshot()` spans; enable it in debug to get per-frame perf.
+prgpu = { version = "0.1", features = ["timing"] }
+# Exaecut fork of virtualritz/after-effects (upstream 0.4) published as
+# `exaecut-*` on crates.io. `[lib] name` inside each crate preserves the
+# canonical `use after_effects::...` / `use premiere::...` paths so effect
+# source code stays identical whether it consumes the fork or the upstream.
+exaecut-after-effects = "0.5"
+exaecut-premiere = "0.5"
+
+# Themis — license gating + retry button. Enable the `license` feature only.
+themis = { git = "https://github.com/Exaecut/themis.git", features = ["license"] }
+
+# Small utilities used by the lib.rs template:
+#   webbrowser: opens the Feedback URL from the Feedback button
+#   hex / home: pulled in transitively by themis on some targets, kept explicit
+#               so the template's `cargo check` is reproducible
+webbrowser = "1.0"
+hex = "0.4"
+home = "0.5"
 bytemuck = "1.23"
 
 [build-dependencies]
-pipl = { git = "https://github.com/Exaecut/after-effects.git", branch = "master" }
+exaecut-pipl = "0.2"
 prgpu = { version = "0.1", features = ["build"] }
 
 [dev-dependencies]
@@ -36,7 +45,7 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 prgpu = { version = "0.1", features = ["timing", "bench"] }
 
 [[bench]]
-name = "effect_cpu"
+name = "{{ crate_name }}_cpu"
 path = "benches/effect_cpu.rs"
 harness = false
 

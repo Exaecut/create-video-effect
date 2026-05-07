@@ -1,13 +1,8 @@
-use crate::kernel::{{ pass1_kernel_name }};
-use crate::kernel::{{ pass2_kernel_name }};
-use crate::kernel::{{ pass1_kernel_params_name }};
-use crate::kernel::{{ pass2_kernel_params_name }};
-use crate::params::Params;
+use crate::kernel::{ {{ pass1_kernel_name }}, {{ pass1_kernel_params_name }}, {{ pass2_kernel_name }}, {{ pass2_kernel_params_name }} };
 
 use after_effects::log;
 use premiere::{self as pr};
 use prgpu::gpu::{buffer, pipeline};
-use prgpu::params::get_param;
 use prgpu::render_properties::GPURenderProperties;
 use prgpu::DeviceHandleInit;
 
@@ -56,10 +51,13 @@ impl pr::GpuFilter for PremiereGPU {
 		let edge_w = config.width;
 		let edge_h = config.height;
 
+		// Aux buffer for the edge pass. prgpu's GPU buffer cache is keyed on
+		// (device, w, h, bpp, tag) and survives across frames; pick a unique
+		// tag per aux when you add more passes.
 		let device = DeviceHandleInit::FromSuite((props.gpu_index, &filter.gpu_device_suite));
 		let buf_a = unsafe { buffer::get_or_create(device, edge_w, edge_h, bpp, 0) };
 
-		// Pass 1: Edge detection → intermediate buffer
+		// Pass 1: edge detection → aux buffer.
 		let mut h_config = config;
 		h_config.dest_data = buf_a.buf.raw;
 		h_config.dest_pitch_px = buf_a.pitch_px as i32;
@@ -72,12 +70,13 @@ impl pr::GpuFilter for PremiereGPU {
 
 		unsafe {
 			{{ pass1_kernel_name }}(&h_config, edge_params).map_err(|e| {
-				log::error!("[{{ crate_name }}] edge_detect: {e}");
+				log::error!("[{{ crate_name }}] {{ pass1_kernel_name }}: {e}");
 				pr::Error::Fail
 			})?;
 		}
 
-		// Pass 2: Composite
+		// Pass 2: composite — outgoing = edge mask (aux buffer), incoming =
+		// original Premiere source, dest = full output.
 		let mut composite_params = {{ pass2_kernel_params_name }}::from_gpu(filter, &render_params, w, h);
 		composite_params.edge_width = edge_w;
 		composite_params.edge_height = edge_h;
@@ -86,18 +85,19 @@ impl pr::GpuFilter for PremiereGPU {
 		let mut comp = config;
 		comp.outgoing_data = Some(buf_a.buf.raw);
 		comp.outgoing_pitch_px = buf_a.pitch_px as i32;
+		comp.outgoing_width = edge_w;
+		comp.outgoing_height = edge_h;
 		comp.incoming_data = config.outgoing_data;
 		comp.incoming_pitch_px = config.outgoing_pitch_px;
 
 		unsafe {
 			{{ pass2_kernel_name }}(&comp, composite_params).map_err(|e| {
-				log::error!("[{{ crate_name }}] composite: {e}");
+				log::error!("[{{ crate_name }}] {{ pass2_kernel_name }}: {e}");
 				pr::Error::Fail
 			})?;
 		}
 
 		prgpu::timing::log_snapshot();
-
 		Ok(())
 	}
 }

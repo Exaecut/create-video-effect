@@ -1,12 +1,9 @@
-use crate::kernel::{{ kernel_name }}, {{ kernel_params_name }};
-use crate::params::Params;
+use crate::kernel::{ {{ kernel_name }}, {{ kernel_params_name }} };
 
 use after_effects::log;
 use premiere::{self as pr};
 use prgpu::gpu::{buffer, pipeline};
-use prgpu::params::get_param;
 use prgpu::render_properties::GPURenderProperties;
-use prgpu::DeviceHandleInit;
 
 #[derive(Default)]
 struct PremiereGPU;
@@ -43,25 +40,26 @@ impl pr::GpuFilter for PremiereGPU {
 		out_frame: *mut pr::sys::PPixHand,
 	) -> Result<(), pr::Error> {
 		let props = unsafe { GPURenderProperties::new(filter, render_params.clone(), frames, frame_count, out_frame) }?;
-		let config = unsafe { prgpu::Configuration::effect(&props, out_frame)? };
+		let mut config = unsafe { prgpu::Configuration::effect(&props, out_frame)? };
+
+		// Premiere only feeds the source through the `outgoing` slot for an
+		// effect filter; mirror it onto `incoming` so any shader branch that
+		// prefers `src.Load(threadId)` keeps working without a null deref.
+		config.incoming_data = config.outgoing_data;
+		config.incoming_pitch_px = config.outgoing_pitch_px;
 
 		let w = props.bounds.width() as f32;
 		let h = props.bounds.height() as f32;
 		let user_params = {{ kernel_params_name }}::from_gpu(filter, &render_params, w, h);
 
-		let mut cfg = config;
-		cfg.incoming_data = config.outgoing_data;
-		cfg.incoming_pitch_px = config.outgoing_pitch_px;
-
 		unsafe {
-			{{ kernel_name }}(&cfg, user_params).map_err(|e| {
+			{{ kernel_name }}(&config, user_params).map_err(|e| {
 				log::error!("[{{ crate_name }}] render: {e}");
 				pr::Error::Fail
 			})?;
 		}
 
 		prgpu::timing::log_snapshot();
-
 		Ok(())
 	}
 }

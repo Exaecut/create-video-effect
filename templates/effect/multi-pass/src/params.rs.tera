@@ -18,6 +18,11 @@ pub enum Params {
 	Tint,
 	Opacity,
 	TintEnd,
+
+	// License retry button — added dynamically by `params_setup` when the
+	// license check fails. Must stay last so it lines up with the
+	// `params.add_customized(Params::NoLicense, ...)` call site.
+	NoLicense,
 }
 
 impl From<Params> for usize {

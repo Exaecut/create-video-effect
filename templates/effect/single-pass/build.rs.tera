@@ -28,6 +28,9 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
 
     println!("cargo:rustc-check-cfg=cfg(gpu_backend, values(\"metal\", \"cuda\", \"opencl\", \"other\"))");
+    // `with_premiere` guards the Premiere GPU filter module. Every new effect
+    // ships one by default; flip this off if you want AE-only behavior.
+    println!("cargo:rustc-cfg=with_premiere");
     println!("cargo:rustc-cfg=gpu_backend=\"{}\"", backend);
     println!("cargo:rerun-if-env-changed=GPU_BACKEND");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_OPENCL");

@@ -40,28 +40,31 @@ impl Generator for EffectGenerator {
 		let template_dir = template_base.join(mode_dir);
 		walk_and_render(&template_dir, "", ctx, &tera_ctx)?;
 
-		// Rename .vekl files to match kernel names.
-		// `declare_kernel!` looks for `<kernel_name>.vekl` in the shaders directory,
-		// so the generic template filenames must be renamed after rendering.
+		// Rename .slang shader files to match kernel names.
+		// `prgpu::build::compile_shaders` globs `shaders/*.slang` and the
+		// `declare_kernel!` macro looks up a `<kernel_name>_CPU_DISPATCH`
+		// symbol that was generated from `<kernel_name>.slang`, so each
+		// shader file must be renamed to its kernel's identifier after
+		// Tera rendering.
 		let shaders_dir = ctx.output_dir.join("shaders");
 		match args.mode {
 			crate::cli::PassMode::SinglePass => {
-				let from = shaders_dir.join("effect.vekl");
-				let to = shaders_dir.join(format!("{}.vekl", tpl_ctx.kernel_name));
+				let from = shaders_dir.join("effect.slang");
+				let to = shaders_dir.join(format!("{}.slang", tpl_ctx.kernel_name));
 				if from.exists() {
 					std::fs::rename(&from, &to)?;
 					log::info!("Renamed {} → {}", from.display(), to.display());
 				}
 			}
 			crate::cli::PassMode::MultiPass => {
-				let from1 = shaders_dir.join("edge_detect.vekl");
-				let to1 = shaders_dir.join(format!("{}.vekl", tpl_ctx.pass1_kernel_name));
+				let from1 = shaders_dir.join("edge_detect.slang");
+				let to1 = shaders_dir.join(format!("{}.slang", tpl_ctx.pass1_kernel_name));
 				if from1.exists() {
 					std::fs::rename(&from1, &to1)?;
 					log::info!("Renamed {} → {}", from1.display(), to1.display());
 				}
-				let from2 = shaders_dir.join("composite.vekl");
-				let to2 = shaders_dir.join(format!("{}.vekl", tpl_ctx.pass2_kernel_name));
+				let from2 = shaders_dir.join("composite.slang");
+				let to2 = shaders_dir.join(format!("{}.slang", tpl_ctx.pass2_kernel_name));
 				if from2.exists() {
 					std::fs::rename(&from2, &to2)?;
 					log::info!("Renamed {} → {}", from2.display(), to2.display());

@@ -1,15 +1,29 @@
 #![allow(clippy::drop_non_drop)]
 // `pub` so the `prgpu::bench` harness in `benches/*.rs` can access the
-// generated `{KERNEL}_CPU_DISPATCH` constants and the param structs.
+// generated `{KERNEL}_CPU_DISPATCH` / `{KERNEL}_CPU_DISPATCH_TILE` constants
+// and the kernel params struct.
 pub mod kernel;
-mod params;
 mod gpu;
+mod params;
 
 use params::*;
-use prgpu::{params::SetupParams, RenderContext};
+use prgpu::params::SetupParams;
+use prgpu::{Configuration, RenderContext};
+use themis::{license::InitializationOptions, types::LicenseState};
 
 use crate::kernel::{{ kernel_params_name }};
 use after_effects::{self as ae, Error, Parameters};
+
+// --- Themis license wiring ---
+//
+// Replace `THEMIS_PRODUCT_ID` with the product id issued for this effect, and
+// point `THEMIS_SERVER_URL` / `FEEDBACK_URL` at your own endpoints. The
+// template ships with a `NoLicense` retry button that calls
+// `themis::license::initialize` with `reset: true` — leave it wired up unless
+// you have a strong reason to skip the license dance.
+const THEMIS_PRODUCT_ID: usize = 0; // TODO: replace with your product id
+const THEMIS_SERVER_URL: &str = "https://localhost:11444/license"; // TODO: replace with your themis server
+const FEEDBACK_URL: &str = "https://example.com/feedback"; // TODO: replace with your feedback URL
 
 #[derive(Default)]
 struct Plugin {
@@ -29,59 +43,70 @@ struct FrameData {
 
 impl Plugin {
 	fn reload_shaders(&mut self) {
-		prgpu::cpu::pipeline::hot_reload();
+		// Only the GPU pipeline caches compiled shaders across dispatches; the
+		// CPU path is JIT-compiled via prgpu's slangc bindings at build time
+		// and has nothing to reload at runtime.
 		prgpu::gpu::pipeline::hot_reload();
 	}
 
-	fn render(
-		&mut self,
-		render_context: RenderContext,
-		user_params: {{ kernel_params_name }},
-	) -> Result<(), ae::Error> {
+	fn render(&mut self, render_context: RenderContext, user_params: {{ kernel_params_name }}) -> Result<(), ae::Error> {
 		let in_data = render_context.in_data;
 		let in_layer = render_context.in_layer;
 		let out_layer = render_context.out_layer;
 
 		let bpp = prgpu::cpu::render::compute_bpp(in_data, out_layer)?;
-
 		let pixel_layout = prgpu::cpu::render::pixel_layout_from_format(in_data, in_layer);
+
 		let w = out_layer.width() as u32;
 		let h = out_layer.height() as u32;
-
 		if w == 0 || h == 0 {
 			return Ok(());
 		}
 
 		let in_ptr = in_layer.buffer().as_ptr() as *const _ as *mut std::ffi::c_void;
 		let out_ptr = out_layer.buffer_mut().as_mut_ptr() as *mut std::ffi::c_void;
-		let in_stride = in_layer.buffer_stride();
-		let out_stride = out_layer.buffer_stride();
-		let src_pitch = (in_stride as i32) / (bpp as i32);
-		let dest_pitch = (out_stride as i32) / (bpp as i32);
-		let is16f = bpp == 8;
+		let src_pitch = in_layer.buffer_stride() as i32 / bpp as i32;
+		let dest_pitch = out_layer.buffer_stride() as i32 / bpp as i32;
 
-		let config = prgpu::Configuration::cpu(in_ptr, out_ptr, src_pitch, dest_pitch, w, h, is16f, bpp, pixel_layout);
+		let config = Configuration::cpu(in_ptr, out_ptr, src_pitch, dest_pitch, w, h, bpp, pixel_layout);
 		kernel::{{ kernel_name }}_cpu(in_data, in_layer, out_layer, &config, user_params)?;
 
 		prgpu::timing::log_snapshot();
-
 		Ok(())
 	}
 }
 
 impl AdobePluginGlobal for Plugin {
-	fn can_load(_host_name: &str, _host_version: &str) -> bool {
-		true
-	}
-
 	fn params_setup(&self, params: &mut Parameters<Params>, in_data: InData, out_data: OutData) -> Result<(), Error> {
-		let _option_button = in_data.effect().set_options_button_name("Infos");
-		Params::setup(params, in_data, out_data)
+		// License gate: valid → full UI; invalid → bring up the Retry button as
+		// the first param so the user can re-initialize without leaving AE.
+		if themis::license::is_valid(false) {
+			let _option_button = in_data.effect().set_options_button_name("Infos");
+			Params::setup(params, in_data, out_data)
+		} else {
+			params.add_customized(
+				Params::NoLicense,
+				"License check failed",
+				ae::ButtonDef::setup(|f| {
+					f.set_label(format!("Retry [{}]", LicenseState::debug_string_from_bits(themis::license::get_license_state().bits())).as_str());
+				}),
+				|p| {
+					p.set_flag(ParamFlag::SUPERVISE, true);
+					p.set_flag(ParamFlag::START_COLLAPSED, true);
+					-1
+				},
+			)?;
+
+			Params::setup(params, in_data, out_data)
+		}
 	}
 
 	fn handle_command(&mut self, command: Command, in_data: InData, mut out_data: OutData, params: &mut Parameters<Params>) -> Result<(), Error> {
 		match command {
 			ae::Command::GlobalSetup => {
+				// Wire the platform-native logger before anything else so
+				// `ae::log::{info,warn,error}!` works inside FrameSetup /
+				// SmartRender and shows up in Console.app / DebugView.
 				#[cfg(target_os = "windows")]
 				let _ = log::set_logger(&ae::win_dbg_logger::DEBUGGER_LOGGER);
 
@@ -89,7 +114,11 @@ impl AdobePluginGlobal for Plugin {
 				let _ = ae::oslog::OsLogger::new(env!("CARGO_PKG_NAME")).init();
 
 				log::set_max_level(log::LevelFilter::Info);
+
 				if in_data.is_premiere() {
+					// Premiere only asks for the formats we advertise here.
+					// Both 8-bit and 32f are supported by the bench harness;
+					// add 16-bit if your kernel handles `Unorm16x4`.
 					let suite = ae::pf::suites::PixelFormat::new()?;
 					suite.clear_supported_pixel_formats(in_data.effect_ref())?;
 					let formats = [ae::pr::PixelFormat::Bgra4444_32f, ae::pr::PixelFormat::Bgra4444_8u];
@@ -102,38 +131,81 @@ impl AdobePluginGlobal for Plugin {
 
 				let _option_button = in_data.effect().set_options_button_name("Infos");
 				if let Ok(suite) = aegp::suites::Utility::new() {
-					self.plugin_id = suite.register_with_aegp(None, "{{ match_name }}")?;
+					self.plugin_id = suite.register_with_aegp("{{ match_name }}")?;
 				}
+
+				themis::license::initialize(InitializationOptions {
+					product_id: THEMIS_PRODUCT_ID,
+					reset: false,
+					server_url: THEMIS_SERVER_URL.to_string(),
+					cert_fingerprint: None,
+				});
 			}
 			ae::Command::About => {
 				let msg = format!("{{ effect_name }}\r\nVersion: {}", env!("CARGO_PKG_VERSION"));
 				out_data.set_return_msg(msg.as_str());
 			}
 			ae::Command::UpdateParamsUi => {
+				if in_data.is_after_effects() && self.plugin_id != ae::aegp::PluginId::default() {
+					let effect = in_data.effect();
+					let plugin_id = self.plugin_id;
+					let _aegp_plugin = effect.aegp_effect(plugin_id)?;
+				}
+
 				out_data.set_out_flag(OutFlags::RefreshUi, true);
 			}
 			ae::Command::UserChangedParam { param_index } => {
 				if params.type_at(param_index) == Params::ReloadShaders {
 					self.reload_shaders();
 				}
+
+				if params.type_at(param_index) == Params::Feedback {
+					let _ = webbrowser::open(FEEDBACK_URL);
+				}
+
+				if params.type_at(param_index) == Params::NoLicense {
+					// Force a full re-initialize with `reset: true` so the
+					// client side drops its cached license blob and re-asks
+					// the server. On success, hide the Retry button and kick
+					// a re-render.
+					let result = themis::license::initialize(InitializationOptions {
+						product_id: THEMIS_PRODUCT_ID,
+						reset: true,
+						server_url: THEMIS_SERVER_URL.to_string(),
+						cert_fingerprint: None,
+					});
+
+					if result {
+						self.reload_shaders();
+						let mut retry_button_param = params.get_mut(Params::NoLicense)?;
+						retry_button_param.set_ui_flag(ParamUIFlags::INVISIBLE, true);
+						retry_button_param.update_param_ui()?;
+
+						out_data.set_force_rerender();
+					}
+				}
 			}
 			ae::Command::FrameSetup { in_layer, .. } => {
-				out_data.set_width((in_layer.width() as f32).round() as _);
-				out_data.set_height((in_layer.height() as f32).round() as _);
+				if !themis::license::is_valid(false) {
+					return Ok(());
+				}
+
+				out_data.set_width(in_layer.width() as _);
+				out_data.set_height(in_layer.height() as _);
 				out_data.set_origin(Point { h: 0, v: 0 });
 
-				use prgpu::params::CpuParams;
 				let user_params = {{ kernel_params_name }}::from_cpu(params, in_layer.width() as f32, in_layer.height() as f32, in_data.is_premiere())?;
-				out_data.set_frame_data::<FrameData>(FrameData {
-					main_params: user_params,
-				});
+				out_data.set_frame_data::<FrameData>(FrameData { main_params: user_params });
 			}
 			ae::Command::FrameSetdown => {
 				in_data.destroy_frame_data::<FrameData>();
 			}
 			ae::Command::Render { in_layer, mut out_layer } => {
-				let frame_data = in_data.frame_data::<FrameData>().unwrap();
+				if !themis::license::is_valid(false) {
+					return Ok(());
+				}
 
+				let frame_data = in_data.frame_data::<FrameData>().unwrap();
 				self.render(
 					RenderContext {
 						in_data: &in_data,
@@ -144,6 +216,10 @@ impl AdobePluginGlobal for Plugin {
 				)?;
 			}
 			ae::Command::SmartPreRender { mut extra } => {
+				if !themis::license::is_valid(false) {
+					return Ok(());
+				}
+
 				let req = extra.output_request();
 				if let Ok(in_result) = extra
 					.callbacks()
@@ -154,14 +230,19 @@ impl AdobePluginGlobal for Plugin {
 				}
 			}
 			ae::Command::SmartRender { extra } => {
+				if !themis::license::is_valid(false) {
+					return Ok(());
+				}
+
 				let cb = extra.callbacks();
 				let Some(input_world) = cb.checkout_layer_pixels(0)? else {
 					return Ok(());
 				};
 
+				// Render in a closure so we can guarantee checkin_layer_pixels
+				// is always called — even if render() returns an error.
 				let render_result = (|| -> Result<(), ae::Error> {
 					if let Ok(Some(mut output_world)) = cb.checkout_output() {
-						use prgpu::params::CpuParams;
 						let user_params = {{ kernel_params_name }}::from_cpu(params, input_world.width() as f32, input_world.height() as f32, in_data.is_premiere())?;
 
 						self.render(
@@ -177,7 +258,6 @@ impl AdobePluginGlobal for Plugin {
 				})();
 
 				cb.checkin_layer_pixels(0)?;
-
 				render_result?;
 			}
 			_ => {}
