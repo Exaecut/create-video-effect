@@ -13,6 +13,7 @@ pub fn resolve_missing_args(
     mode: Option<PassMode>,
     prefix: Option<String>,
     dir: Option<std::path::PathBuf>,
+    no_post: bool,
 ) -> Result<ResolvedArgs, GenerateError> {
     let resolved_type = resolve_project_type(project_type)?;
     let resolved_name = resolve_name(name)?;
@@ -26,13 +27,27 @@ pub fn resolve_missing_args(
         mode: resolved_mode,
         prefix,
         dir,
+        no_post,
     })
 }
 
 fn resolve_project_type(project_type: ProjectType) -> Result<ProjectType, GenerateError> {
-    // Type has a default (effect), so only prompt if user explicitly wants to change
-    // In practice the type is already resolved from CLI before TUI, so this is a no-op
-    Ok(project_type)
+    let options = vec!["effect", "transition"];
+    let default = match project_type {
+        ProjectType::Effect => 0,
+        ProjectType::Transition => 1,
+    };
+    let result = inquire::Select::new("Project type:", options)
+        .with_starting_cursor(default)
+        .prompt();
+    match result {
+        Ok("transition") => {
+            // Still return Transition here — the caller in main.rs will
+            // catch it and emit TransitionNotImplemented.
+            Ok(ProjectType::Transition)
+        }
+        _ => Ok(ProjectType::Effect),
+    }
 }
 
 fn resolve_name(name: Option<String>) -> Result<String, GenerateError> {

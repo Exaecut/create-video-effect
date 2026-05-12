@@ -9,20 +9,10 @@ mod params;
 use params::*;
 use prgpu::params::SetupParams;
 use prgpu::{Configuration, RenderContext};
-use themis::{license::InitializationOptions, types::LicenseState};
 
 use crate::kernel::{{ kernel_params_name }};
 use after_effects::{self as ae, Error, Parameters};
 
-// --- Themis license wiring ---
-//
-// Replace `THEMIS_PRODUCT_ID` with the product id issued for this effect, and
-// point `THEMIS_SERVER_URL` / `FEEDBACK_URL` at your own endpoints. The
-// template ships with a `NoLicense` retry button that calls
-// `themis::license::initialize` with `reset: true` — leave it wired up unless
-// you have a strong reason to skip the license dance.
-const THEMIS_PRODUCT_ID: usize = 0; // TODO: replace with your product id
-const THEMIS_SERVER_URL: &str = "https://localhost:11444/license"; // TODO: replace with your themis server
 const FEEDBACK_URL: &str = "https://example.com/feedback"; // TODO: replace with your feedback URL
 
 #[derive(Default)]
@@ -78,27 +68,8 @@ impl Plugin {
 
 impl AdobePluginGlobal for Plugin {
 	fn params_setup(&self, params: &mut Parameters<Params>, in_data: InData, out_data: OutData) -> Result<(), Error> {
-		// License gate: valid → full UI; invalid → bring up the Retry button as
-		// the first param so the user can re-initialize without leaving AE.
-		if themis::license::is_valid(false) {
-			let _option_button = in_data.effect().set_options_button_name("Infos");
-			Params::setup(params, in_data, out_data)
-		} else {
-			params.add_customized(
-				Params::NoLicense,
-				"License check failed",
-				ae::ButtonDef::setup(|f| {
-					f.set_label(format!("Retry [{}]", LicenseState::debug_string_from_bits(themis::license::get_license_state().bits())).as_str());
-				}),
-				|p| {
-					p.set_flag(ParamFlag::SUPERVISE, true);
-					p.set_flag(ParamFlag::START_COLLAPSED, true);
-					-1
-				},
-			)?;
-
-			Params::setup(params, in_data, out_data)
-		}
+		let _option_button = in_data.effect().set_options_button_name("Infos");
+		Params::setup(params, in_data, out_data)
 	}
 
 	fn handle_command(&mut self, command: Command, in_data: InData, mut out_data: OutData, params: &mut Parameters<Params>) -> Result<(), Error> {
@@ -133,13 +104,6 @@ impl AdobePluginGlobal for Plugin {
 				if let Ok(suite) = aegp::suites::Utility::new() {
 					self.plugin_id = suite.register_with_aegp("{{ match_name }}")?;
 				}
-
-				themis::license::initialize(InitializationOptions {
-					product_id: THEMIS_PRODUCT_ID,
-					reset: false,
-					server_url: THEMIS_SERVER_URL.to_string(),
-					cert_fingerprint: None,
-				});
 			}
 			ae::Command::About => {
 				let msg = format!("{{ effect_name }}\r\nVersion: {}", env!("CARGO_PKG_VERSION"));
@@ -162,34 +126,8 @@ impl AdobePluginGlobal for Plugin {
 				if params.type_at(param_index) == Params::Feedback {
 					let _ = webbrowser::open(FEEDBACK_URL);
 				}
-
-				if params.type_at(param_index) == Params::NoLicense {
-					// Force a full re-initialize with `reset: true` so the
-					// client side drops its cached license blob and re-asks
-					// the server. On success, hide the Retry button and kick
-					// a re-render.
-					let result = themis::license::initialize(InitializationOptions {
-						product_id: THEMIS_PRODUCT_ID,
-						reset: true,
-						server_url: THEMIS_SERVER_URL.to_string(),
-						cert_fingerprint: None,
-					});
-
-					if result {
-						self.reload_shaders();
-						let mut retry_button_param = params.get_mut(Params::NoLicense)?;
-						retry_button_param.set_ui_flag(ParamUIFlags::INVISIBLE, true);
-						retry_button_param.update_param_ui()?;
-
-						out_data.set_force_rerender();
-					}
-				}
 			}
 			ae::Command::FrameSetup { in_layer, .. } => {
-				if !themis::license::is_valid(false) {
-					return Ok(());
-				}
-
 				out_data.set_width(in_layer.width() as _);
 				out_data.set_height(in_layer.height() as _);
 				out_data.set_origin(Point { h: 0, v: 0 });
@@ -201,10 +139,6 @@ impl AdobePluginGlobal for Plugin {
 				in_data.destroy_frame_data::<FrameData>();
 			}
 			ae::Command::Render { in_layer, mut out_layer } => {
-				if !themis::license::is_valid(false) {
-					return Ok(());
-				}
-
 				let frame_data = in_data.frame_data::<FrameData>().unwrap();
 				self.render(
 					RenderContext {
@@ -216,10 +150,6 @@ impl AdobePluginGlobal for Plugin {
 				)?;
 			}
 			ae::Command::SmartPreRender { mut extra } => {
-				if !themis::license::is_valid(false) {
-					return Ok(());
-				}
-
 				let req = extra.output_request();
 				if let Ok(in_result) = extra
 					.callbacks()
@@ -230,10 +160,6 @@ impl AdobePluginGlobal for Plugin {
 				}
 			}
 			ae::Command::SmartRender { extra } => {
-				if !themis::license::is_valid(false) {
-					return Ok(());
-				}
-
 				let cb = extra.callbacks();
 				let Some(input_world) = cb.checkout_layer_pixels(0)? else {
 					return Ok(());

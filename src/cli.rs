@@ -5,10 +5,19 @@ use clap::Parser;
 /// CLI scaffold tool for PrGPU/VEKL-based video effects and transitions
 #[derive(Parser, Debug)]
 #[command(
-    name = "cargo-create-video-effect",
-    bin_name = "cargo create-video-effect",
+    name = "cargo",
+    bin_name = "cargo",
     version,
     about
+)]
+pub enum Cargo {
+    CreateVideoEffect(Cli),
+}
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "create-video-effect",
+    about = "CLI scaffold tool for PrGPU/VEKL-based video effects and transitions"
 )]
 pub struct Cli {
     /// Project type: "effect" or "transition" (default: effect).
@@ -33,6 +42,10 @@ pub struct Cli {
     /// Output directory override (default: ./<name>)
     #[arg(short, long)]
     pub dir: Option<PathBuf>,
+
+    /// Skip post-generation steps (cargo check, etc.)
+    #[arg(long)]
+    pub no_post: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +76,7 @@ pub struct ResolvedArgs {
     pub mode: PassMode,
     pub prefix: Option<String>,
     pub dir: Option<PathBuf>,
+    pub no_post: bool,
 }
 
 impl Cli {

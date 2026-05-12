@@ -7,7 +7,7 @@ mod tui;
 mod workspace;
 
 use clap::Parser;
-use cli::{AppTarget, ProjectType, ResolvedArgs};
+use cli::{AppTarget, Cargo, ProjectType, ResolvedArgs};
 use error::GenerateError;
 use generator::Generator;
 
@@ -21,7 +21,7 @@ fn main() {
 }
 
 fn run() -> Result<(), GenerateError> {
-	let cli_args = cli::Cli::parse();
+	let Cargo::CreateVideoEffect(cli_args) = Cargo::parse();
 
 	let (project_type, name) = cli_args.resolve_type_and_name();
 
@@ -41,34 +41,40 @@ fn run() -> Result<(), GenerateError> {
 	let needs_tui = name.is_none();
 
 	let resolved = if needs_tui {
-		tui::resolve_missing_args(project_type, name, Some(app), Some(cli_args.mode.clone()), cli_args.prefix.clone(), cli_args.dir.clone())?
+		tui::resolve_missing_args(project_type, name, Some(app), Some(cli_args.mode.clone()), cli_args.prefix.clone(), cli_args.dir.clone(), cli_args.no_post)?
 	} else {
 		ResolvedArgs {
 			project_type,
-			name: name.unwrap(),
-			app,
-			mode: cli_args.mode.clone(),
-			prefix: cli_args.prefix.clone(),
-			dir: cli_args.dir.clone(),
+            name: name.unwrap(),
+            app,
+            mode: cli_args.mode.clone(),
+            prefix: cli_args.prefix.clone(),
+            dir: cli_args.dir.clone(),
+            no_post: cli_args.no_post,
 		}
 	};
 
 	commands::effect::EffectGenerator::validate(&resolved)?;
+	eprintln!("  \x1b[36m⠿\x1b[0m Preparing generation context...");
 	let ctx = generator::GenerateContext::new(&resolved)?;
 	commands::effect::EffectGenerator::generate(&resolved, &ctx)?;
 
-	match commands::effect::EffectGenerator::post_generate(&resolved, &ctx) {
-		Ok(()) => {
-			println!("\n\x1b[32m✓\x1b[0m Effect \x1b[1m{}\x1b[0m created at {}", resolved.name, ctx.output_dir.display());
+	if resolved.no_post {
+		println!("\n\x1b[32m✓\x1b[0m Effect \x1b[1m{}\x1b[0m created at {} (skipped post-generation)", resolved.name, ctx.output_dir.display());
+	} else {
+		match commands::effect::EffectGenerator::post_generate(&resolved, &ctx) {
+			Ok(()) => {
+				println!("\n\x1b[32m✓\x1b[0m Effect \x1b[1m{}\x1b[0m created at {}", resolved.name, ctx.output_dir.display());
+			}
+			Err(GenerateError::CargoCheckFailed) => {
+				println!(
+					"\n\x1b[33m⚠\x1b[0m Effect \x1b[1m{}\x1b[0m created at {} but cargo check failed.",
+					resolved.name,
+					ctx.output_dir.display()
+				);
+			}
+			Err(e) => return Err(e),
 		}
-		Err(GenerateError::CargoCheckFailed) => {
-			println!(
-				"\n\x1b[33m⚠\x1b[0m Effect \x1b[1m{}\x1b[0m created at {} but cargo check failed.",
-				resolved.name,
-				ctx.output_dir.display()
-			);
-		}
-		Err(e) => return Err(e),
 	}
 
 	Ok(())

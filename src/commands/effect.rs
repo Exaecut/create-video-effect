@@ -25,6 +25,8 @@ impl Generator for EffectGenerator {
 	}
 
 	fn generate(args: &ResolvedArgs, ctx: &GenerateContext) -> Result<(), GenerateError> {
+		eprintln!("  \x1b[36m⠿\x1b[0m Generating project files for \x1b[1m{}\x1b[0m...", args.name);
+
 		let tpl_ctx = TemplateContext::from_args(args);
 		let tera_ctx = tpl_ctx.to_tera_context();
 
@@ -79,34 +81,33 @@ impl Generator for EffectGenerator {
 	}
 
 	fn post_generate(args: &ResolvedArgs, ctx: &GenerateContext) -> Result<(), GenerateError> {
-		log::info!("Running cargo check on {}...", ctx.output_dir.display());
+		eprintln!("  \x1b[36m⠿\x1b[0m Running cargo check on {}...", ctx.output_dir.display());
 
-		let output = std::process::Command::new("cargo")
+		let mut child = match std::process::Command::new("cargo")
 			.args(["check"])
 			.current_dir(&ctx.output_dir)
-			.output();
-
-		match output {
-			Ok(output) if output.status.success() => {
-				log::info!("✓ cargo check passed for '{}'", args.name);
-				Ok(())
-			}
-			Ok(output) => {
-				let stdout = String::from_utf8_lossy(&output.stdout);
-				let stderr = String::from_utf8_lossy(&output.stderr);
-				log::warn!("⚠ cargo check failed for '{}'. Project was created but may need fixes.", args.name);
-				if !stderr.is_empty() {
-					eprintln!("{stderr}");
-				}
-				if !stdout.is_empty() {
-					eprintln!("{stdout}");
-				}
-				Err(GenerateError::CargoCheckFailed)
-			}
+			.stdout(std::process::Stdio::inherit())
+			.stderr(std::process::Stdio::inherit())
+			.spawn()
+		{
+			Ok(c) => c,
 			Err(e) => {
 				log::warn!("⚠ Could not run cargo check: {e}. Project was created successfully.");
-				Ok(())
+				return Ok(());
 			}
+		};
+
+		let status = child.wait().unwrap_or_else(|e| {
+			log::warn!("⚠ Failed to wait on cargo check: {e}");
+			std::process::ExitStatus::default()
+		});
+
+		if status.success() {
+			log::info!("✓ cargo check passed for '{}'", args.name);
+			Ok(())
+		} else {
+			log::warn!("⚠ cargo check failed for '{}'. Project was created but may need fixes.", args.name);
+			Err(GenerateError::CargoCheckFailed)
 		}
 	}
 }
