@@ -1,0 +1,40 @@
+//! GPU render test for {{ effect_name }}.
+//!
+//! Renders a checkerboard through the {{ kernel_name }} kernel and writes
+//! the output as a PNG for visual inspection.
+//!
+//! Requires a GPU (Metal on macOS, CUDA on Windows).
+
+use prgpu::testing::{GpuContext, builtin_checkerboard, write_png};
+use {{ crate_name }}::kernel::{ {{ kernel_name }}, {{ kernel_params_name }} };
+
+#[test]
+fn render_checkerboard_default() {
+    let gpu = GpuContext::create().expect("GPU context creation");
+
+    let (w, h) = (512, 512);
+    let input = builtin_checkerboard(w, h);
+
+    let (in_buf, out_buf) = gpu.create_io_buffers(w, h, 4).expect("buffer allocation");
+    gpu.upload_to_buffer(&in_buf, &input, w, h, 4).expect("upload");
+
+    let params = {{ kernel_params_name }} {
+        strength: 1.0_f32,
+        tint_r: 0.0_f32,
+        tint_g: 0.0_f32,
+        tint_b: 1.0_f32,
+        tint_a: 1.0_f32,
+    };
+
+    let config = gpu.build_config(&in_buf, &out_buf, w, h, 4);
+
+    unsafe { {{ kernel_name }}(&config, params).expect("GPU kernel dispatch") };
+
+    let output = gpu.download_from_buffer(&out_buf, w, h, 4).expect("download");
+
+    assert!(!output.is_empty(), "output is empty");
+    let has_nonzero = output.iter().any(|&b| b != 0);
+    assert!(has_nonzero, "output is all black — kernel may not have run");
+
+    write_png("tests/output/basic.png", &output, w, h, 4).expect("write png");
+}

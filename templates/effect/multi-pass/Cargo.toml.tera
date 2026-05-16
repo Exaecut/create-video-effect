@@ -35,7 +35,8 @@ prgpu = { version = "0.1", features = ["build"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "html_reports"] }
-prgpu = { version = "0.1", features = ["timing", "bench"] }
+prgpu = { version = "0.1", features = ["timing", "bench", "testing"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [[bench]]
 name = "{{ crate_name }}_cpu"
