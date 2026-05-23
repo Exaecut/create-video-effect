@@ -68,12 +68,13 @@ my_effect/
 ├── benches/
 │   └── effect_cpu.rs
 ├── shaders/
-│   └── my_effect.vekl
-└── src/
-    ├── kernel.rs
-    ├── params.rs
-    ├── lib.rs
-    └── gpu.rs
+│   └── my_effect.slang
+├── src/
+│   ├── kernel.rs
+│   ├── params.rs
+│   └── lib.rs
+└── tests/
+    └── render_basic.rs
 ```
 
 ### Multi-Pass Effect
@@ -86,19 +87,16 @@ my_effect/
 ├── benches/
 │   └── effect_cpu.rs
 ├── shaders/
-│   ├── my_effect_edge.vekl
-│   └── my_effect_tint.vekl
-└── src/
-    ├── kernel.rs
-    ├── params.rs
-    ├── lib.rs
-    └── gpu.rs
+│   ├── my_effect_edge.slang
+│   └── my_effect_tint.slang
+├── src/
+│   ├── kernel.rs
+│   ├── params.rs
+│   └── lib.rs
+└── tests/
+    └── render_basic.rs
 ```
 
 ## Workspace Detection
 
 If the output directory is inside a Cargo workspace, the tool automatically adds the new crate to the workspace's `members` list.
-
-## License
-
-Licensed under either of Apache License, Version 2.0 or MIT license at your option.

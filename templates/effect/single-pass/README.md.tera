@@ -1,0 +1,27 @@
+# {{ display_name }}
+
+A single-pass GPU-accelerated video effect for Adobe Premiere Pro and After Effects, scaffolded using `create-video-effect`.
+
+## Project Structure
+
+- `src/lib.rs`: Defines the `Effect` trait implementation, registration adapters, and dynamic parameter UI (reload shaders, etc.).
+- `src/params.rs`: Declares After Effects/Premiere UI parameters and groups.
+- `src/kernel.rs`: Bridges UI parameters into the GPU-safe `{{ kernel_params_name }}` struct using the `kernel_params!` macro, and registers the compute shader kernel.
+- `shaders/{{ kernel_name }}.slang`: The primary Slang compute shader performing the rendering logic.
+- `benches/{{ crate_name }}_cpu.rs`: Criterion-based CPU-kernel benchmarks.
+- `tests/render_basic.rs`: Basic end-to-end integration rendering test using the mock Premiere Pro host.
+
+## Customizing this Template
+
+### 1. Add/Modify UI Parameters
+Edit `src/params.rs` to declare new parameters in the `Params` enum and define their UI configuration inside `SetupParams::setup`.
+
+### 2. Map Parameters to the GPU
+In `src/kernel.rs`, update the `kernel_params!` block to match the new UI parameters. Map them using appropriate extractors like `float(V)`, `color_r(V)`, etc.
+
+### 3. Update the Shader Struct & Logic
+Modify `shaders/{{ kernel_name }}.slang`. Update the `struct {{ kernel_params_name }}` to match the Rust-side parameter layout byte-for-byte, and implement your pixel manipulation code inside the `{{ kernel_name }}` entry function.
+
+### Single-pass vs. Multi-pass Customization
+- **Single-pass**: The entire effect is rendered in a single pass. The primary input texture (`outgoing`) is processed directly to the write-target output buffer (`dst`).
+- **Multi-pass**: Customization involves coordinating multiple distinct shader passes. In a multi-pass effect, intermediate render textures (auxiliary/depth buffers) are declared and populated by earlier passes (e.g., edge detection) before being combined or composited in subsequent shader passes to produce the final output.

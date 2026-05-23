@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 # prgpu owns the Slang shader pipeline (cpu + gpu dispatch, mip chain, CPU
 # tile rayon pool, timing, logging). The `timing` feature just toggles the
 # `timing::log_snapshot()` spans; enable it in debug to get per-frame perf.
-prgpu = { version = "0.1", features = ["timing"] }
+prgpu = { version = "0.1.13", features = ["timing"] }
 # Exaecut fork of virtualritz/after-effects (upstream 0.4) published as
 # `exaecut-*` on crates.io. `[lib] name` inside each crate preserves the
 # canonical `use after_effects::...` / `use premiere::...` paths so effect
@@ -31,11 +31,11 @@ bytemuck = "1.23"
 
 [build-dependencies]
 exaecut-pipl = "0.2"
-prgpu = { version = "0.1", features = ["build"] }
+prgpu = { version = "0.1.13", features = ["build"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "html_reports"] }
-prgpu = { version = "0.1", features = ["timing", "bench", "testing"] }
+prgpu = { version = "0.1.13", features = ["timing", "bench", "testing"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [[bench]]
